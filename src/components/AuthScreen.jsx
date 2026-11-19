@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Wallet, Lock, Mail, ArrowRight } from 'lucide-react';
+import { Wallet, Lock, Mail, ArrowRight, Loader2 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { logger } from '../lib/logger';
 
 export default function AuthScreen() {
-  const [mode, setMode] = useState('signin'); // 'signin' | 'signup'
+  const [mode, setMode] = useState('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -12,22 +13,26 @@ export default function AuthScreen() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!supabase) return;
+    if (!supabase || loading) return;
     setError('');
     setMessage('');
     setLoading(true);
+    logger.action(mode === 'signup' ? 'AUTH_SIGNUP' : 'AUTH_SIGNIN', { email });
     try {
       if (mode === 'signup') {
         const { data, error: signUpErr } = await supabase.auth.signUp({ email, password });
         if (signUpErr) throw signUpErr;
+        logger.success('AUTH_SIGNUP', { hasSession: Boolean(data.session) });
         if (!data.session) {
           setMessage('Account created. Check your inbox to confirm your email, then sign in.');
         }
       } else {
         const { error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
         if (signInErr) throw signInErr;
+        logger.success('AUTH_SIGNIN', { email });
       }
     } catch (err) {
+      logger.error(mode === 'signup' ? 'AUTH_SIGNUP' : 'AUTH_SIGNIN', err);
       setError(err.message || 'Authentication failed');
     } finally {
       setLoading(false);
@@ -61,6 +66,7 @@ export default function AuthScreen() {
             <div className="grid grid-cols-2 gap-1 p-1 bg-canvas rounded-xl border border-hairline mb-5">
               <button
                 type="button"
+                disabled={loading}
                 onClick={() => { setMode('signin'); setError(''); setMessage(''); }}
                 className={`py-2 text-xs font-semibold rounded-lg transition ${
                   mode === 'signin' ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink'
@@ -70,6 +76,7 @@ export default function AuthScreen() {
               </button>
               <button
                 type="button"
+                disabled={loading}
                 onClick={() => { setMode('signup'); setError(''); setMessage(''); }}
                 className={`py-2 text-xs font-semibold rounded-lg transition ${
                   mode === 'signup' ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink'
@@ -87,10 +94,11 @@ export default function AuthScreen() {
                   <input
                     type="email"
                     required
+                    disabled={loading}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
-                    className="w-full pl-9 pr-3 py-2 text-sm bg-canvas border border-hairline rounded-lg focus:outline-none focus:border-ink transition"
+                    className="w-full pl-9 pr-3 py-2 text-sm bg-canvas border border-hairline rounded-lg focus:outline-none focus:border-ink transition disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -103,10 +111,11 @@ export default function AuthScreen() {
                     type="password"
                     required
                     minLength={6}
+                    disabled={loading}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="At least 6 characters"
-                    className="w-full pl-9 pr-3 py-2 text-sm bg-canvas border border-hairline rounded-lg focus:outline-none focus:border-ink transition"
+                    className="w-full pl-9 pr-3 py-2 text-sm bg-canvas border border-hairline rounded-lg focus:outline-none focus:border-ink transition disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -125,10 +134,19 @@ export default function AuthScreen() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-ink hover:bg-neutral-800 text-white text-sm font-semibold transition disabled:opacity-60"
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-ink hover:bg-neutral-800 text-white text-sm font-semibold transition disabled:opacity-60 cursor-pointer disabled:cursor-not-allowed"
               >
-                <span>{loading ? 'Please wait...' : mode === 'signin' ? 'Sign In' : 'Create Account'}</span>
-                <ArrowRight className="w-4 h-4" />
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>{mode === 'signin' ? 'Signing in...' : 'Creating account...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <span>{mode === 'signin' ? 'Sign In' : 'Create Account'}</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </form>
           </>

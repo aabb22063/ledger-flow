@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { MONTHS, SHORT_WEEKDAYS, WEEKDAYS, buildStarterSeed } from '../lib/constants';
 import { formatDisplayDate, formatMoney, getWeekdayIndex } from '../lib/formatters';
+import { logger } from '../lib/logger';
 
 function generateId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID
@@ -29,6 +30,8 @@ export function useLedgerData(session, notify) {
       setLoading(false);
       return;
     }
+    const t0 = performance.now();
+    logger.action('FETCH_ALL', { userId });
     setLoading(true);
     try {
       const [settingsRes, acctsRes, tasksRes, txRes] = await Promise.all([
@@ -75,8 +78,8 @@ export function useLedgerData(session, notify) {
         note: tx.note || ''
       }));
 
-      // Auto-seed starter accounts & tasks on brand-new account
       if (loadedAccounts.length === 0 && loadedTasks.length === 0) {
+        logger.action('SEED_STARTER_DATA', { userId });
         const seed = buildStarterSeed(userId);
         const [seedAcctRes, seedTaskRes] = await Promise.all([
           supabase.from('accounts').insert(seed.accounts),
@@ -91,6 +94,7 @@ export function useLedgerData(session, notify) {
             id: t.id, name: t.name, kind: t.kind, budget: t.budget, color: t.color
           })));
           setTransactions([]);
+          logger.success('SEED_STARTER_DATA', { accounts: seed.accounts.length, tasks: seed.tasks.length });
           setLoading(false);
           return;
         }
@@ -99,7 +103,14 @@ export function useLedgerData(session, notify) {
       setAccounts(loadedAccounts);
       setTasks(loadedTasks);
       setTransactions(loadedTxs);
+      logger.success('FETCH_ALL', {
+        ms: Math.round(performance.now() - t0),
+        accounts: loadedAccounts.length,
+        tasks: loadedTasks.length,
+        transactions: loadedTxs.length
+      });
     } catch (err) {
+      logger.error('FETCH_ALL', err);
       notify(err.message || 'Failed to sync with Supabase', 'error');
     } finally {
       setLoading(false);
@@ -111,12 +122,20 @@ export function useLedgerData(session, notify) {
   }, [fetchAll]);
 
   const updateCurrency = async (nextCurrency) => {
+    logger.action('UPDATE_CURRENCY', { nextCurrency });
     setCurrency(nextCurrency);
     if (!supabase || !userId) return;
+    setSyncing(true);
     const { error } = await supabase
       .from('user_settings')
       .upsert({ user_id: userId, currency: nextCurrency, updated_at: new Date().toISOString() });
-    if (error) notify(error.message, 'error');
+    setSyncing(false);
+    if (error) {
+      logger.error('UPDATE_CURRENCY', error);
+      notify(error.message, 'error');
+    } else {
+      logger.success('UPDATE_CURRENCY', { currency: nextCurrency });
+    }
   };
 
   const saveTransaction = async (mode, data) => {
@@ -144,6 +163,7 @@ export function useLedgerData(session, notify) {
       note: (data.note || '').trim()
     };
 
+    logger.action(mode === 'edit' ? 'UPDATE_TRANSACTION' : 'CREATE_TRANSACTION', row);
     setSyncing(true);
     const { error } = mode === 'edit'
       ? await supabase.from('transactions').update(row).eq('id', id).eq('user_id', userId)
@@ -151,6 +171,7 @@ export function useLedgerData(session, notify) {
     setSyncing(false);
 
     if (error) {
+      logger.error('SAVE_TRANSACTION', error);
       notify(error.message, 'error');
       return false;
     }
@@ -173,19 +194,23 @@ export function useLedgerData(session, notify) {
       setViewYear(y);
       setViewMonth(m - 1);
     }
+    logger.success('SAVE_TRANSACTION', { id, mode });
     notify(mode === 'edit' ? 'Transaction updated' : 'Transaction saved');
     return true;
   };
 
   const deleteTransaction = async (id) => {
+    logger.action('DELETE_TRANSACTION', { id });
     setSyncing(true);
     const { error } = await supabase.from('transactions').delete().eq('id', id).eq('user_id', userId);
     setSyncing(false);
     if (error) {
+      logger.error('DELETE_TRANSACTION', error);
       notify(error.message, 'error');
       return;
     }
     setTransactions((prev) => prev.filter((t) => t.id !== id));
+    logger.success('DELETE_TRANSACTION', { id });
     notify('Transaction deleted', 'info');
   };
 
@@ -203,6 +228,7 @@ export function useLedgerData(session, notify) {
       color: data.color || '#111110'
     };
 
+    logger.action(mode === 'edit' ? 'UPDATE_ACCOUNT' : 'CREATE_ACCOUNT', row);
     setSyncing(true);
     const { error } = mode === 'edit'
       ? await supabase.from('accounts').update(row).eq('id', id).eq('user_id', userId)
@@ -210,25 +236,30 @@ export function useLedgerData(session, notify) {
     setSyncing(false);
 
     if (error) {
+      logger.error('SAVE_ACCOUNT', error);
       notify(error.message, 'error');
       return false;
     }
 
     const clientObj = { id, name, type: row.type, openingBalance: opening, color: row.color };
     setAccounts((prev) => (mode === 'edit' ? prev.map((a) => (a.id === id ? clientObj : a)) : [...prev, clientObj]));
+    logger.success('SAVE_ACCOUNT', { id, mode });
     notify(mode === 'edit' ? 'Account updated' : 'Account added');
     return true;
   };
 
   const deleteAccount = async (id) => {
+    logger.action('DELETE_ACCOUNT', { id });
     setSyncing(true);
     const { error } = await supabase.from('accounts').delete().eq('id', id).eq('user_id', userId);
     setSyncing(false);
     if (error) {
+      logger.error('DELETE_ACCOUNT', error);
       notify(error.message, 'error');
       return;
     }
     setAccounts((prev) => prev.filter((a) => a.id !== id));
+    logger.success('DELETE_ACCOUNT', { id });
     notify('Account deleted', 'info');
   };
 
@@ -246,6 +277,7 @@ export function useLedgerData(session, notify) {
       color: data.color || '#0D6E4E'
     };
 
+    logger.action(mode === 'edit' ? 'UPDATE_TASK' : 'CREATE_TASK', row);
     setSyncing(true);
     const { error } = mode === 'edit'
       ? await supabase.from('tasks').update(row).eq('id', id).eq('user_id', userId)
@@ -253,37 +285,45 @@ export function useLedgerData(session, notify) {
     setSyncing(false);
 
     if (error) {
+      logger.error('SAVE_TASK', error);
       notify(error.message, 'error');
       return false;
     }
 
     const clientObj = { id, name, kind: row.kind, budget, color: row.color };
     setTasks((prev) => (mode === 'edit' ? prev.map((t) => (t.id === id ? clientObj : t)) : [...prev, clientObj]));
+    logger.success('SAVE_TASK', { id, mode });
     notify(mode === 'edit' ? 'Task updated' : 'Task added');
     return true;
   };
 
   const deleteTask = async (id) => {
+    logger.action('DELETE_TASK', { id });
     setSyncing(true);
     const { error } = await supabase.from('tasks').delete().eq('id', id).eq('user_id', userId);
     setSyncing(false);
     if (error) {
+      logger.error('DELETE_TASK', error);
       notify(error.message, 'error');
       return;
     }
     setTasks((prev) => prev.filter((t) => t.id !== id));
+    logger.success('DELETE_TASK', { id });
     notify('Task deleted', 'info');
   };
 
   const clearTransactions = async () => {
+    logger.action('CLEAR_TRANSACTIONS', { userId });
     setSyncing(true);
     const { error } = await supabase.from('transactions').delete().eq('user_id', userId);
     setSyncing(false);
     if (error) {
+      logger.error('CLEAR_TRANSACTIONS', error);
       notify(error.message, 'error');
       return;
     }
     setTransactions([]);
+    logger.success('CLEAR_TRANSACTIONS');
     notify('All transactions cleared', 'info');
   };
 
@@ -292,6 +332,11 @@ export function useLedgerData(session, notify) {
       notify('Invalid backup JSON format', 'error');
       return;
     }
+    logger.action('IMPORT_BACKUP', {
+      accounts: parsed.accounts.length,
+      tasks: parsed.tasks.length,
+      transactions: parsed.transactions.length
+    });
     setSyncing(true);
     try {
       const acctRows = parsed.accounts.map((a) => ({
@@ -329,15 +374,16 @@ export function useLedgerData(session, notify) {
       if (parsed.currency) await updateCurrency(parsed.currency);
 
       await fetchAll();
+      logger.success('IMPORT_BACKUP');
       notify('Backup imported to Supabase');
     } catch (err) {
+      logger.error('IMPORT_BACKUP', err);
       notify(err.message || 'Import failed', 'error');
     } finally {
       setSyncing(false);
     }
   };
 
-  // Derived Calculations
   const accountStatsMap = useMemo(() => {
     const map = {};
     for (const a of accounts) {
