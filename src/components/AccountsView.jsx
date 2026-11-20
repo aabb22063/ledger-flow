@@ -1,16 +1,20 @@
 import React from 'react';
-import { ArrowLeftRight, Plus, Wallet } from 'lucide-react';
+import { ArrowLeftRight, Plus, Wallet, CreditCard } from 'lucide-react';
 import { formatMoney } from '../lib/formatters';
 
 export default function AccountsView({
   currency,
+  privacyLevel,
   accounts,
   accountStatsMap,
   onOpenTransfer,
+  onPayCreditCard,
   onOpenAddAccount,
   onEditAccount,
   onDeleteAccount
 }) {
+  const hideBalances = privacyLevel === 'balances' || privacyLevel === 'all';
+  const hideAll = privacyLevel === 'all';
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -59,40 +63,55 @@ export default function AccountsView({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {accounts.map((a) => {
             const st = accountStatsMap[a.id] || { balance: 0, totalIn: 0, totalOut: 0 };
+            const isCreditOwed = a.type === 'Credit Card' && st.balance < 0;
             return (
-              <div key={a.id} className="bg-surface rounded-xl p-5 border border-hairline">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: a.color }} />
-                    <div>
-                      <h3 className="text-base font-bold text-ink">{a.name}</h3>
-                      <p className="text-xs text-muted">{a.type}</p>
+              <div key={a.id} className="bg-surface rounded-xl p-5 border border-hairline flex flex-col justify-between">
+                <div>
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: a.color }} />
+                      <div>
+                        <h3 className="text-base font-bold text-ink">{a.name}</h3>
+                        <p className="text-xs text-muted">{a.type}</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <button type="button" onClick={() => onEditAccount(a)} className="text-xs text-ink font-medium hover:underline py-1 px-1">
+                        Edit
+                      </button>
+                      <button type="button" onClick={() => onDeleteAccount(a)} className="text-xs text-negative font-medium hover:underline py-1 px-1">
+                        Delete
+                      </button>
                     </div>
                   </div>
-                  <div className="flex gap-3">
-                    <button type="button" onClick={() => onEditAccount(a)} className="text-xs text-ink font-medium hover:underline py-1 px-1">
-                      Edit
+                  <p className={`font-mono text-2xl font-bold mt-4 tabular-nums ${st.balance < 0 ? 'text-negative' : 'text-ink'}`}>
+                    {formatMoney(st.balance, currency, hideBalances)}
+                  </p>
+                  {isCreditOwed && (
+                    <button
+                      type="button"
+                      disabled={accounts.length < 2}
+                      onClick={() => onPayCreditCard(a, Math.abs(st.balance))}
+                      className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-canvas border border-hairline text-ink hover:bg-hairline/40 transition disabled:opacity-40"
+                    >
+                      <CreditCard className="w-3.5 h-3.5 text-negative" />
+                      Pay Card Bill ({formatMoney(Math.abs(st.balance), currency, hideAll)})
                     </button>
-                    <button type="button" onClick={() => onDeleteAccount(a)} className="text-xs text-negative font-medium hover:underline py-1 px-1">
-                      Delete
-                    </button>
-                  </div>
+                  )}
                 </div>
-                <p className={`font-mono text-2xl font-bold mt-4 tabular-nums ${st.balance < 0 ? 'text-negative' : 'text-ink'}`}>
-                  {formatMoney(st.balance, currency)}
-                </p>
+
                 <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-hairline text-xs">
                   <div>
                     <span className="text-muted block">Opening</span>
-                    <strong className="font-mono text-ink">{formatMoney(a.openingBalance, currency)}</strong>
+                    <strong className="font-mono text-ink">{formatMoney(a.openingBalance, currency, hideBalances)}</strong>
                   </div>
                   <div>
                     <span className="text-muted block">In</span>
-                    <strong className="font-mono text-positive">+{formatMoney(st.totalIn, currency)}</strong>
+                    <strong className="font-mono text-positive">+{formatMoney(st.totalIn, currency, hideAll)}</strong>
                   </div>
                   <div>
                     <span className="text-muted block">Out</span>
-                    <strong className="font-mono text-negative">-{formatMoney(st.totalOut, currency)}</strong>
+                    <strong className="font-mono text-negative">-{formatMoney(st.totalOut, currency, hideAll)}</strong>
                   </div>
                 </div>
               </div>

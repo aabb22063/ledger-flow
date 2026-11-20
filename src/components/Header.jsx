@@ -1,14 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Wallet, Plus, ChevronLeft, ChevronRight, MoreVertical,
-  Download, Upload, Trash2, LogOut, RefreshCw
+  Download, Upload, Trash2, LogOut, RefreshCw, Eye, EyeOff
 } from 'lucide-react';
 
 const TABS = [
   { id: 'dashboard', label: 'Overview' },
   { id: 'transactions', label: 'Transactions' },
   { id: 'accounts', label: 'Accounts' },
-  { id: 'budgets', label: 'Tasks & Budgets' }
+  { id: 'budgets', label: 'Plan & Budgets' }
 ];
 
 export default function Header({
@@ -20,7 +20,11 @@ export default function Header({
   onToggleAllTime,
   currency,
   onCurrencyChange,
+  privacyLevel,
+  onTogglePrivacyClick,
+  onPrivacyLongPress,
   onOpenAddTx,
+  onOpenCsvImport,
   onExportCsv,
   onExportJson,
   onImportJson,
@@ -31,6 +35,31 @@ export default function Header({
   userEmail
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const pressTimerRef = useRef(null);
+  const longPressedRef = useRef(false);
+
+  const startPress = () => {
+    longPressedRef.current = false;
+    pressTimerRef.current = setTimeout(() => {
+      longPressedRef.current = true;
+      onPrivacyLongPress();
+    }, 500);
+  };
+
+  const cancelPress = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  };
+
+  const handleEyeClick = () => {
+    if (longPressedRef.current) {
+      longPressedRef.current = false;
+      return;
+    }
+    onTogglePrivacyClick();
+  };
 
   return (
     <header className="bg-surface border-b border-hairline sticky top-0 z-30">
@@ -44,7 +73,11 @@ export default function Header({
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-base font-bold tracking-tight text-ink leading-none">LedgerFlow</h1>
-                {syncing && <RefreshCw className="w-3.5 h-3.5 text-muted animate-spin" />}
+                {syncing && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-canvas border border-hairline text-muted">
+                    <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Syncing
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-muted hidden sm:block mt-0.5 truncate max-w-[200px]">
                 {userEmail || 'Synced with Supabase'}
@@ -54,7 +87,6 @@ export default function Header({
 
           {/* Controls */}
           <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
-            {/* Period Switcher */}
             <div className="flex items-center bg-canvas rounded-lg p-0.5 border border-hairline">
               <button
                 type="button"
@@ -68,7 +100,7 @@ export default function Header({
                 type="button"
                 onClick={onToggleAllTime}
                 title="Click to toggle All Time"
-                className="px-2.5 py-1 text-xs font-semibold text-ink min-w-[116px] text-center"
+                className="px-2 py-1 text-xs font-semibold text-ink min-w-[108px] text-center"
               >
                 {periodLabel}
               </button>
@@ -86,7 +118,7 @@ export default function Header({
               aria-label="Currency"
               value={currency}
               onChange={(e) => onCurrencyChange(e.target.value)}
-              className="bg-surface border border-hairline rounded-lg px-2.5 py-1.5 text-xs font-semibold text-ink focus:outline-none focus:border-ink"
+              className="bg-surface border border-hairline rounded-lg px-2 py-1.5 text-xs font-semibold text-ink focus:outline-none focus:border-ink"
             >
               <option value="INR">₹ INR</option>
               <option value="USD">$ USD</option>
@@ -96,8 +128,30 @@ export default function Header({
 
             <button
               type="button"
+              onPointerDown={startPress}
+              onPointerUp={cancelPress}
+              onPointerLeave={cancelPress}
+              onPointerCancel={cancelPress}
+              onClick={handleEyeClick}
+              onContextMenu={(e) => e.preventDefault()}
+              aria-label="Privacy mode: click to hide balances, long-press to hide all numbers"
+              title="Click: hide balances · Hold: hide all numbers"
+              className={`inline-flex items-center gap-1 p-2 rounded-lg border transition select-none ${
+                privacyLevel === 'all'
+                  ? 'bg-negative text-white border-negative'
+                  : privacyLevel === 'balances'
+                    ? 'bg-ink text-white border-ink'
+                    : 'bg-surface border-hairline text-muted hover:text-ink hover:bg-canvas'
+              }`}
+            >
+              {privacyLevel === 'off' ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+              {privacyLevel === 'all' && <span className="text-[10px] font-bold leading-none">ALL</span>}
+            </button>
+
+            <button
+              type="button"
               onClick={onOpenAddTx}
-              className="inline-flex items-center gap-1.5 bg-ink hover:bg-neutral-800 text-white text-xs font-semibold px-3.5 py-2 rounded-lg transition"
+              className="hidden md:inline-flex items-center gap-1.5 bg-ink hover:bg-neutral-800 text-white text-xs font-semibold px-3.5 py-2 rounded-lg transition"
             >
               <Plus className="w-4 h-4" />
               <span>Add Entry</span>
@@ -120,10 +174,18 @@ export default function Header({
                   <div className="fixed left-4 right-4 top-28 sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-56 bg-surface rounded-xl shadow-lg border border-hairline py-1.5 z-40">
                     <button
                       type="button"
+                      disabled={syncing}
                       onClick={() => { setMenuOpen(false); onRefresh(); }}
+                      className="w-full text-left px-4 py-2 text-xs font-medium text-ink hover:bg-canvas flex items-center gap-2.5 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 text-muted ${syncing ? 'animate-spin' : ''}`} /> Sync Now
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setMenuOpen(false); onOpenCsvImport(); }}
                       className="w-full text-left px-4 py-2 text-xs font-medium text-ink hover:bg-canvas flex items-center gap-2.5"
                     >
-                      <RefreshCw className="w-3.5 h-3.5 text-muted" /> Sync Now
+                      <Upload className="w-3.5 h-3.5 text-muted" /> Import Bank CSV
                     </button>
                     <button
                       type="button"
@@ -151,8 +213,9 @@ export default function Header({
                     <div className="border-t border-hairline my-1" />
                     <button
                       type="button"
+                      disabled={syncing}
                       onClick={() => { setMenuOpen(false); onClearTransactions(); }}
-                      className="w-full text-left px-4 py-2 text-xs font-medium text-negative hover:bg-red-50 flex items-center gap-2.5"
+                      className="w-full text-left px-4 py-2 text-xs font-medium text-negative hover:bg-red-50 flex items-center gap-2.5 disabled:opacity-50"
                     >
                       <Trash2 className="w-3.5 h-3.5" /> Clear All Transactions
                     </button>
@@ -170,14 +233,14 @@ export default function Header({
           </div>
         </div>
 
-        {/* Navigation Tabs */}
-        <nav className="flex items-center gap-2 overflow-x-auto no-scrollbar -mb-px" aria-label="Main navigation">
+        {/* Desktop Navigation Tabs */}
+        <nav className="hidden md:flex items-center gap-2 overflow-x-auto no-scrollbar -mb-px" aria-label="Main navigation">
           {TABS.map((tab) => (
             <button
               key={tab.id}
               type="button"
               onClick={() => setActiveTab(tab.id)}
-              className={`px-3 py-2.5 text-xs sm:text-sm whitespace-nowrap border-b-2 transition ${
+              className={`px-3 py-2.5 text-sm whitespace-nowrap border-b-2 transition ${
                 activeTab === tab.id
                   ? 'font-semibold border-ink text-ink'
                   : 'font-medium border-transparent text-muted hover:text-ink'

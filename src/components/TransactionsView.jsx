@@ -1,16 +1,19 @@
 import React, { useState, useMemo } from 'react';
-import { Search } from 'lucide-react';
+import { Search, Upload } from 'lucide-react';
 import { WEEKDAYS } from '../lib/constants';
 import { formatDisplayDate, formatMoney, formatTime12h, getWeekdayIndex, getWeekdayName } from '../lib/formatters';
 
 export default function TransactionsView({
   currency,
+  privacyLevel,
   accounts,
   tasks,
   periodTxs,
   onEditTx,
-  onDeleteTx
+  onDeleteTx,
+  onOpenCsvImport
 }) {
+  const hideAll = privacyLevel === 'all';
   const [searchQ, setSearchQ] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [filterAccount, setFilterAccount] = useState('all');
@@ -120,10 +123,17 @@ export default function TransactionsView({
         <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-3 border-t border-hairline text-xs">
           <div className="flex items-center gap-4 text-muted">
             <span>Showing <strong className="text-ink">{filteredTxs.length}</strong> entries</span>
-            <span>In: <strong className="font-mono text-positive">{formatMoney(sumIn, currency)}</strong></span>
-            <span>Out: <strong className="font-mono text-negative">{formatMoney(sumOut, currency)}</strong></span>
+            <span>In: <strong className="font-mono text-positive">{formatMoney(sumIn, currency, hideAll)}</strong></span>
+            <span>Out: <strong className="font-mono text-negative">{formatMoney(sumOut, currency, hideAll)}</strong></span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onOpenCsvImport}
+              className="inline-flex items-center gap-1 border border-hairline rounded-lg px-2.5 py-1.5 bg-surface text-ink hover:bg-canvas font-medium"
+            >
+              <Upload className="w-3.5 h-3.5 text-muted" /> Import CSV
+            </button>
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
@@ -198,20 +208,20 @@ export default function TransactionsView({
                   <td className={`py-3 px-4 text-right whitespace-nowrap font-mono font-semibold tabular-nums ${
                     tx.type === 'income' ? 'text-positive' : tx.type === 'expense' ? 'text-negative' : 'text-ink'
                   }`}>
-                    {tx.type === 'income' ? '+' : tx.type === 'expense' ? '-' : ''}{formatMoney(tx.amount, currency)}
+                    {tx.type === 'income' ? '+' : tx.type === 'expense' ? '-' : ''}{formatMoney(tx.amount, currency, hideAll)}
                   </td>
                   <td className="py-3 px-4 text-right whitespace-nowrap">
                     <button
                       type="button"
                       onClick={() => onEditTx(tx)}
-                      className="text-xs font-medium text-ink hover:underline mr-3"
+                      className="text-xs font-medium text-ink hover:underline mr-3 py-1"
                     >
                       Edit
                     </button>
                     <button
                       type="button"
                       onClick={() => onDeleteTx(tx)}
-                      className="text-xs font-medium text-negative hover:underline"
+                      className="text-xs font-medium text-negative hover:underline py-1"
                     >
                       Delete
                     </button>

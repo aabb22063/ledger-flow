@@ -10,6 +10,23 @@ function generateId() {
     : `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function loadUserLocal(userId, key, fallback) {
+  if (!userId) return fallback;
+  try {
+    const raw = localStorage.getItem(`lf_${userId}_${key}`);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveUserLocal(userId, key, value) {
+  if (!userId) return;
+  try {
+    localStorage.setItem(`lf_${userId}_${key}`, JSON.stringify(value));
+  } catch { /* ignore */ }
+}
+
 export function useLedgerData(session, notify) {
   const userId = session?.user?.id || null;
 
@@ -20,10 +37,28 @@ export function useLedgerData(session, notify) {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
 
+  // Extended planning & productivity state (persisted per-user locally)
+  const [quickTemplates, setQuickTemplates] = useState([]);
+  const [recurringBills, setRecurringBills] = useState([]);
+  const [savingsGoals, setSavingsGoals] = useState([]);
+  const [categoryRules, setCategoryRules] = useState([]);
+
   const now = new Date();
   const [viewYear, setViewYear] = useState(now.getFullYear());
   const [viewMonth, setViewMonth] = useState(now.getMonth());
   const [showAllTime, setShowAllTime] = useState(false);
+
+  useEffect(() => {
+    if (!userId) return;
+    setQuickTemplates(loadUserLocal(userId, 'templates', []));
+    setRecurringBills(loadUserLocal(userId, 'recurring', []));
+    setSavingsGoals(loadUserLocal(userId, 'goals', []));
+    setCategoryRules(loadUserLocal(userId, 'rules', [
+      { id: 'rule_1', keyword: 'swiggy', taskId: '' },
+      { id: 'rule_2', keyword: 'zomato', taskId: '' },
+      { id: 'rule_3', keyword: 'uber', taskId: '' }
+    ]));
+  }, [userId]);
 
   const fetchAll = useCallback(async () => {
     if (!supabase || !userId) {
@@ -138,7 +173,60 @@ export function useLedgerData(session, notify) {
     }
   };
 
+  // Supports single entry OR split expenses (when data.splits is provided)
   const saveTransaction = async (mode, data) => {
+    if (mode === 'add' && data.type === 'expense' && Array.isArray(data.splits) && data.splits.length > 1) {
+      const validSplits = data.splits
+        .map((s) => ({ taskId: s.taskId, amount: parseFloat(s.amount), note: (s.note || data.note || '').trim() }))
+        .filter((s) => Number.isFinite(s.amount) && s.amount > 0 && s.taskId);
+
+      if (validSplits.length === 0) {
+        notify('Enter valid split amounts', 'error');
+        return false;
+      }
+
+      const rows = validSplits.map((sp) => ({
+        id: generateId(),
+        user_id: userId,
+        type: 'expense',
+        amount: sp.amount,
+        account_id: data.accountId,
+        to_account_id: '',
+        task_id: sp.taskId,
+        date: data.date,
+        time: data.time,
+        note: sp.note ? `${sp.note} (Split)` : 'Split expense'
+      }));
+
+      logger.action('CREATE_SPLIT_TRANSACTION', { count: rows.length });
+      setSyncing(true);
+      const { error } = await supabase.from('transactions').insert(rows);
+      setSyncing(false);
+
+      if (error) {
+        logger.error('CREATE_SPLIT_TRANSACTION', error);
+        notify(error.message, 'error');
+        return false;
+      }
+
+      const clientObjs = rows.map((row) => ({
+        id: row.id,
+        type: row.type,
+        amount: row.amount,
+        accountId: row.account_id,
+        toAccountId: '',
+        taskId: row.task_id,
+        date: row.date,
+        time: row.time,
+        note: row.note
+      }));
+
+      setTransactions((prev) => [...clientObjs, ...prev]);
+      logger.success('CREATE_SPLIT_TRANSACTION', { count: rows.length });
+      notify(`Saved ${rows.length} split entries`);
+      return true;
+    }
+
     const amt = parseFloat(data.amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       notify('Enter a valid amount', 'error');
@@ -196,6 +284,49 @@ export function useLedgerData(session, notify) {
     }
     logger.success('SAVE_TRANSACTION', { id, mode });
     notify(mode === 'edit' ? 'Transaction updated' : 'Transaction saved');
+    return true;
+  };
+
+  const bulkImportTransactions = async (entries) => {
+    if (!entries?.length) return false;
+    const rows = entries.map((e) => ({
+      id: generateId(),
+      user_id: userId,
+      type: e.type,
+      amount: Number(e.amount),
+      account_id: e.accountId,
+      to_account_id: '',
+      task_id: e.taskId || '',
+      date: e.date,
+      time: e.time || '12:00',
+      note: (e.note || '').trim()
+    }));
+
+    logger.action('BULK_IMPORT_CSV', { count: rows.length });
+    setSyncing(true);
+    const { error } = await supabase.from('transactions').insert(rows);
+    setSyncing(false);
+
+    if (error) {
+      logger.error('BULK_IMPORT_CSV', error);
+      notify(error.message, 'error');
+      return false;
+    }
+
+    const clientObjs = rows.map((r) => ({
+      id: r.id,
+      type: r.type,
+      amount: r.amount,
+      accountId: r.account_id,
+      toAccountId: '',
+      taskId: r.task_id,
+      date: r.date,
+      time: r.time,
+      note: r.note
+    }));
+    setTransactions((prev) => [...clientObjs, ...prev]);
+    logger.success('BULK_IMPORT_CSV', { count: rows.length });
+    notify(`Imported ${rows.length} transactions`);
     return true;
   };
 
@@ -384,6 +515,103 @@ export function useLedgerData(session, notify) {
     }
   };
 
+  // Quick Templates CRUD
+  const addQuickTemplate = (tpl) => {
+    const next = [...quickTemplates, { ...tpl, id: generateId() }];
+    setQuickTemplates(next);
+    saveUserLocal(userId, 'templates', next);
+    logger.success('ADD_QUICK_TEMPLATE', tpl);
+    notify('Quick template saved');
+  };
+
+  const deleteQuickTemplate = (id) => {
+    const next = quickTemplates.filter((t) => t.id !== id);
+    setQuickTemplates(next);
+    saveUserLocal(userId, 'templates', next);
+    notify('Template removed', 'info');
+  };
+
+  // Recurring Bills CRUD
+  const addRecurringBill = (bill) => {
+    const next = [...recurringBills, { ...bill, id: generateId(), lastLoggedMonth: '' }];
+    setRecurringBills(next);
+    saveUserLocal(userId, 'recurring', next);
+    logger.success('ADD_RECURRING_BILL', bill);
+    notify('Recurring bill added');
+  };
+
+  const deleteRecurringBill = (id) => {
+    const next = recurringBills.filter((b) => b.id !== id);
+    setRecurringBills(next);
+    saveUserLocal(userId, 'recurring', next);
+    notify('Recurring bill removed', 'info');
+  };
+
+  const logRecurringBill = async (bill) => {
+    const curNow = new Date();
+    const date = `${curNow.getFullYear()}-${String(curNow.getMonth() + 1).padStart(2, '0')}-${String(curNow.getDate()).padStart(2, '0')}`;
+    const time = `${String(curNow.getHours()).padStart(2, '0')}:${String(curNow.getMinutes()).padStart(2, '0')}`;
+    const ok = await saveTransaction('add', {
+      type: 'expense',
+      amount: bill.amount,
+      accountId: bill.accountId,
+      taskId: bill.taskId,
+      date,
+      time,
+      note: `${bill.name} (Recurring)`
+    });
+    if (ok) {
+      const monthKey = `${curNow.getFullYear()}-${String(curNow.getMonth() + 1).padStart(2, '0')}`;
+      const next = recurringBills.map((b) => (b.id === bill.id ? { ...b, lastLoggedMonth: monthKey } : b));
+      setRecurringBills(next);
+      saveUserLocal(userId, 'recurring', next);
+    }
+    return ok;
+  };
+
+  // Savings Goals CRUD
+  const addSavingsGoal = (goal) => {
+    const next = [...savingsGoals, { ...goal, id: generateId(), savedAmount: Number(goal.savedAmount) || 0 }];
+    setSavingsGoals(next);
+    saveUserLocal(userId, 'goals', next);
+    logger.success('ADD_SAVINGS_GOAL', goal);
+    notify('Savings goal created');
+  };
+
+  const contributeToGoal = (id, delta) => {
+    const amt = parseFloat(delta);
+    if (!Number.isFinite(amt) || amt <= 0) return;
+    const next = savingsGoals.map((g) => (g.id === id ? { ...g, savedAmount: (Number(g.savedAmount) || 0) + amt } : g));
+    setSavingsGoals(next);
+    saveUserLocal(userId, 'goals', next);
+    notify('Contribution added to goal');
+  };
+
+  const deleteSavingsGoal = (id) => {
+    const next = savingsGoals.filter((g) => g.id !== id);
+    setSavingsGoals(next);
+    saveUserLocal(userId, 'goals', next);
+    notify('Goal deleted', 'info');
+  };
+
+  // Auto-Categorization Rules CRUD
+  const addCategoryRule = (keyword, taskId) => {
+    const kw = (keyword || '').trim().toLowerCase();
+    if (!kw || !taskId) return;
+    const next = [...categoryRules, { id: generateId(), keyword: kw, taskId }];
+    setCategoryRules(next);
+    saveUserLocal(userId, 'rules', next);
+    notify('Auto-categorization rule saved');
+  };
+
+  const deleteCategoryRule = (id) => {
+    const next = categoryRules.filter((r) => r.id !== id);
+    setCategoryRules(next);
+    saveUserLocal(userId, 'rules', next);
+    notify('Rule deleted', 'info');
+  };
+
+  // Derived Calculations
   const accountStatsMap = useMemo(() => {
     const map = {};
     for (const a of accounts) {
@@ -442,6 +670,57 @@ export function useLedgerData(session, notify) {
       }
     }
 
+    // Previous month MoM comparison
+    const prevM = viewMonth === 0 ? 11 : viewMonth - 1;
+    const prevY = viewMonth === 0 ? viewYear - 1 : viewYear;
+    const prevPrefix = `${prevY}-${String(prevM + 1).padStart(2, '0')}`;
+    let prevIn = 0;
+    let prevOut = 0;
+    if (!showAllTime) {
+      for (const tx of transactions) {
+        if (!tx.date?.startsWith(prevPrefix)) continue;
+        const amt = Number(tx.amount) || 0;
+        if (tx.type === 'income') prevIn += amt;
+        else if (tx.type === 'expense') prevOut += amt;
+      }
+    }
+    const outMomPct = prevOut > 0 ? Math.round(((periodOut - prevOut) / prevOut) * 100) : null;
+    const inMomPct = prevIn > 0 ? Math.round(((periodIn - prevIn) / prevIn) * 100) : null;
+
+    // Safe to Spend daily pace
+    let totalBudget = 0;
+    let budgetedSpent = 0;
+    for (const t of tasks) {
+      if (t.kind === 'expense' && t.budget > 0) {
+        totalBudget += Number(t.budget) || 0;
+        budgetedSpent += taskTotals[t.id] || 0;
+      }
+    }
+    const remainingBudget = totalBudget - budgetedSpent;
+    const today = new Date();
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+    const isCurrentMonth = today.getFullYear() === viewYear && today.getMonth() === viewMonth;
+    const remainingDaysInMonth = isCurrentMonth ? Math.max(1, daysInMonth - today.getDate() + 1) : daysInMonth;
+    const safeToSpendPerDay = totalBudget > 0 ? remainingBudget / remainingDaysInMonth : 0;
+
+    // 6-Month Net Worth trend
+    const openingTotal = accounts.reduce((s, a) => s + (Number(a.openingBalance) || 0), 0);
+    const netWorthSeries = [];
+    for (let i = 5; i >= 0; i -= 1) {
+      const d = new Date(viewYear, viewMonth - i, 1);
+      const y = d.getFullYear();
+      const m = d.getMonth();
+      const endOfM = `${y}-${String(m + 1).padStart(2, '0')}-${String(new Date(y, m + 1, 0).getDate()).padStart(2, '0')}`;
+      let running = openingTotal;
+      for (const tx of transactions) {
+        if (!tx.date || tx.date > endOfM) continue;
+        const amt = Number(tx.amount) || 0;
+        if (tx.type === 'income') running += amt;
+        else if (tx.type === 'expense') running -= amt;
+      }
+      netWorthSeries.push({ month: `${MONTHS[m].slice(0, 3)} ${String(y).slice(2)}`, netWorth: running });
+    }
+
     const sortedTasks = Object.entries(taskTotals)
       .map(([tid, amount]) => {
         const t = tasks.find((x) => x.id === tid) || { id: tid, name: 'Other', color: '#6B6B66' };
@@ -451,7 +730,7 @@ export function useLedgerData(session, notify) {
 
     const daysInPeriod = showAllTime
       ? Math.max(1, new Set(periodTxs.map((t) => t.date)).size)
-      : new Date(viewYear, viewMonth + 1, 0).getDate();
+      : daysInMonth;
 
     const dateMap = {};
     if (!showAllTime) {
@@ -482,12 +761,21 @@ export function useLedgerData(session, notify) {
       outCount,
       avgDaily: periodOut / daysInPeriod,
       savingsRate: periodIn > 0 ? Math.round(((periodIn - periodOut) / periodIn) * 100) : 0,
+      prevMonthShort: MONTHS[prevM].slice(0, 3),
+      outMomPct,
+      inMomPct,
+      totalBudget,
+      budgetedSpent,
+      remainingBudget,
+      remainingDaysInMonth,
+      safeToSpendPerDay,
+      netWorthSeries,
       sortedTasks,
       dailySeries,
       weekdaySeries,
       peakDay
     };
-  }, [accounts, tasks, accountStatsMap, periodTxs, showAllTime, viewYear, viewMonth, currency]);
+  }, [accounts, tasks, transactions, accountStatsMap, periodTxs, showAllTime, viewYear, viewMonth, currency]);
 
   const periodLabel = showAllTime ? 'All Time' : `${MONTHS[viewMonth]} ${viewYear}`;
 
@@ -526,8 +814,13 @@ export function useLedgerData(session, notify) {
     accountStatsMap,
     periodTxs,
     metrics,
+    quickTemplates,
+    recurringBills,
+    savingsGoals,
+    categoryRules,
     updateCurrency,
     saveTransaction,
+    bulkImportTransactions,
     deleteTransaction,
     saveAccount,
     deleteAccount,
@@ -535,6 +828,16 @@ export function useLedgerData(session, notify) {
     deleteTask,
     clearTransactions,
     importBackup,
+    addQuickTemplate,
+    deleteQuickTemplate,
+    addRecurringBill,
+    deleteRecurringBill,
+    logRecurringBill,
+    addSavingsGoal,
+    contributeToGoal,
+    deleteSavingsGoal,
+    addCategoryRule,
+    deleteCategoryRule,
     refreshData: fetchAll
   };
 }
