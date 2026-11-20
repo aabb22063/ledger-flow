@@ -1,8 +1,8 @@
 const isDebugEnabled = () => {
   try {
-    return import.meta.env.DEV || localStorage.getItem('ledgerflow_debug') === 'true';
+    return import.meta.env.DEV || localStorage.getItem('ledgerflow_debug') !== 'false';
   } catch {
-    return import.meta.env.DEV;
+    return true;
   }
 };
 
@@ -10,13 +10,20 @@ function timestamp() {
   return new Date().toISOString().split('T')[1].slice(0, 12);
 }
 
-function sendToDevTerminal(level, line, payload) {
-  if (!import.meta.env.DEV) return;
+function sendRemoteLog(level, line, payload) {
+  const endpoint = import.meta.env.DEV ? '/__dev_log' : '/api/log';
   try {
-    fetch('/__dev_log', {
+    const body = JSON.stringify({ level, line, payload });
+    if (typeof navigator !== 'undefined' && navigator.sendBeacon && !import.meta.env.DEV) {
+      const blob = new Blob([body], { type: 'application/json' });
+      navigator.sendBeacon(endpoint, blob);
+      return;
+    }
+    fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ level, line, payload })
+      body,
+      keepalive: true
     }).catch(() => {});
   } catch { /* ignore */ }
 }
@@ -26,17 +33,17 @@ export const logger = {
     if (!isDebugEnabled()) return;
     const line = `[LedgerFlow ${timestamp()}] ▶ ${actionName}`;
     console.info(line, payload ?? '');
-    sendToDevTerminal('info', line, payload);
+    sendRemoteLog('info', line, payload);
   },
   success(actionName, meta) {
     if (!isDebugEnabled()) return;
     const line = `[LedgerFlow ${timestamp()}] ✓ ${actionName}`;
     console.info(line, meta ?? '');
-    sendToDevTerminal('info', line, meta);
+    sendRemoteLog('info', line, meta);
   },
   error(actionName, err) {
     const line = `[LedgerFlow ${timestamp()}] ✕ ${actionName}`;
     console.error(line, err);
-    sendToDevTerminal('error', line, err?.message || err);
+    sendRemoteLog('error', line, err?.message || err);
   }
 };

@@ -10,23 +10,6 @@ function generateId() {
     : `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function loadUserLocal(userId, key, fallback) {
-  if (!userId) return fallback;
-  try {
-    const raw = localStorage.getItem(`lf_${userId}_${key}`);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function saveUserLocal(userId, key, value) {
-  if (!userId) return;
-  try {
-    localStorage.setItem(`lf_${userId}_${key}`, JSON.stringify(value));
-  } catch { /* ignore */ }
-}
-
 export function useLedgerData(session, notify) {
   const userId = session?.user?.id || null;
 
@@ -34,31 +17,18 @@ export function useLedgerData(session, notify) {
   const [accounts, setAccounts] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [transactions, setTransactions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-
-  // Extended planning & productivity state (persisted per-user locally)
   const [quickTemplates, setQuickTemplates] = useState([]);
   const [recurringBills, setRecurringBills] = useState([]);
   const [savingsGoals, setSavingsGoals] = useState([]);
   const [categoryRules, setCategoryRules] = useState([]);
 
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+
   const now = new Date();
   const [viewYear, setViewYear] = useState(now.getFullYear());
   const [viewMonth, setViewMonth] = useState(now.getMonth());
   const [showAllTime, setShowAllTime] = useState(false);
-
-  useEffect(() => {
-    if (!userId) return;
-    setQuickTemplates(loadUserLocal(userId, 'templates', []));
-    setRecurringBills(loadUserLocal(userId, 'recurring', []));
-    setSavingsGoals(loadUserLocal(userId, 'goals', []));
-    setCategoryRules(loadUserLocal(userId, 'rules', [
-      { id: 'rule_1', keyword: 'swiggy', taskId: '' },
-      { id: 'rule_2', keyword: 'zomato', taskId: '' },
-      { id: 'rule_3', keyword: 'uber', taskId: '' }
-    ]));
-  }, [userId]);
 
   const fetchAll = useCallback(async () => {
     if (!supabase || !userId) {
@@ -69,17 +39,34 @@ export function useLedgerData(session, notify) {
     logger.action('FETCH_ALL', { userId });
     setLoading(true);
     try {
-      const [settingsRes, acctsRes, tasksRes, txRes] = await Promise.all([
+      const [
+        settingsRes,
+        acctsRes,
+        tasksRes,
+        txRes,
+        tplRes,
+        billsRes,
+        goalsRes,
+        rulesRes
+      ] = await Promise.all([
         supabase.from('user_settings').select('currency').eq('user_id', userId).maybeSingle(),
         supabase.from('accounts').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
         supabase.from('tasks').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
-        supabase.from('transactions').select('*').eq('user_id', userId).order('date', { ascending: false })
+        supabase.from('transactions').select('*').eq('user_id', userId).order('date', { ascending: false }),
+        supabase.from('quick_templates').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
+        supabase.from('recurring_bills').select('*').eq('user_id', userId).order('due_day', { ascending: true }),
+        supabase.from('savings_goals').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
+        supabase.from('category_rules').select('*').eq('user_id', userId).order('created_at', { ascending: true })
       ]);
 
       if (settingsRes.error) throw settingsRes.error;
       if (acctsRes.error) throw acctsRes.error;
       if (tasksRes.error) throw tasksRes.error;
       if (txRes.error) throw txRes.error;
+      if (tplRes.error) throw tplRes.error;
+      if (billsRes.error) throw billsRes.error;
+      if (goalsRes.error) throw goalsRes.error;
+      if (rulesRes.error) throw rulesRes.error;
 
       if (settingsRes.data?.currency) {
         setCurrency(settingsRes.data.currency);
@@ -113,6 +100,39 @@ export function useLedgerData(session, notify) {
         note: tx.note || ''
       }));
 
+      const loadedTemplates = (tplRes.data || []).map((t) => ({
+        id: t.id,
+        name: t.name,
+        amount: Number(t.amount) || 0,
+        type: t.type || 'expense',
+        accountId: t.account_id || '',
+        taskId: t.task_id || ''
+      }));
+
+      const loadedBills = (billsRes.data || []).map((b) => ({
+        id: b.id,
+        name: b.name,
+        amount: Number(b.amount) || 0,
+        dueDay: Number(b.due_day) || 1,
+        accountId: b.account_id || '',
+        taskId: b.task_id || '',
+        lastLoggedMonth: b.last_logged_month || ''
+      }));
+
+      const loadedGoals = (goalsRes.data || []).map((g) => ({
+        id: g.id,
+        name: g.name,
+        targetAmount: Number(g.target_amount) || 0,
+        savedAmount: Number(g.saved_amount) || 0,
+        targetDate: g.target_date || ''
+      }));
+
+      const loadedRules = (rulesRes.data || []).map((r) => ({
+        id: r.id,
+        keyword: r.keyword,
+        taskId: r.task_id
+      }));
+
       if (loadedAccounts.length === 0 && loadedTasks.length === 0) {
         logger.action('SEED_STARTER_DATA', { userId });
         const seed = buildStarterSeed(userId);
@@ -129,6 +149,10 @@ export function useLedgerData(session, notify) {
             id: t.id, name: t.name, kind: t.kind, budget: t.budget, color: t.color
           })));
           setTransactions([]);
+          setQuickTemplates([]);
+          setRecurringBills([]);
+          setSavingsGoals([]);
+          setCategoryRules([]);
           logger.success('SEED_STARTER_DATA', { accounts: seed.accounts.length, tasks: seed.tasks.length });
           setLoading(false);
           return;
@@ -138,11 +162,20 @@ export function useLedgerData(session, notify) {
       setAccounts(loadedAccounts);
       setTasks(loadedTasks);
       setTransactions(loadedTxs);
+      setQuickTemplates(loadedTemplates);
+      setRecurringBills(loadedBills);
+      setSavingsGoals(loadedGoals);
+      setCategoryRules(loadedRules);
+
       logger.success('FETCH_ALL', {
         ms: Math.round(performance.now() - t0),
         accounts: loadedAccounts.length,
         tasks: loadedTasks.length,
-        transactions: loadedTxs.length
+        transactions: loadedTxs.length,
+        templates: loadedTemplates.length,
+        bills: loadedBills.length,
+        goals: loadedGoals.length,
+        rules: loadedRules.length
       });
     } catch (err) {
       logger.error('FETCH_ALL', err);
@@ -173,7 +206,6 @@ export function useLedgerData(session, notify) {
     }
   };
 
-  // Supports single entry OR split expenses (when data.splits is provided)
   const saveTransaction = async (mode, data) => {
     if (mode === 'add' && data.type === 'expense' && Array.isArray(data.splits) && data.splits.length > 1) {
       const validSplits = data.splits
@@ -515,35 +547,86 @@ export function useLedgerData(session, notify) {
     }
   };
 
-  // Quick Templates CRUD
-  const addQuickTemplate = (tpl) => {
-    const next = [...quickTemplates, { ...tpl, id: generateId() }];
-    setQuickTemplates(next);
-    saveUserLocal(userId, 'templates', next);
-    logger.success('ADD_QUICK_TEMPLATE', tpl);
-    notify('Quick template saved');
+  // Quick Templates (Supabase persisted)
+  const addQuickTemplate = async (tpl) => {
+    const id = generateId();
+    const row = {
+      id,
+      user_id: userId,
+      name: tpl.name,
+      amount: Number(tpl.amount),
+      type: tpl.type || 'expense',
+      account_id: tpl.accountId || '',
+      task_id: tpl.taskId || ''
+    };
+    logger.action('CREATE_QUICK_TEMPLATE', row);
+    setSyncing(true);
+    const { error } = await supabase.from('quick_templates').insert(row);
+    setSyncing(false);
+    if (error) {
+      logger.error('CREATE_QUICK_TEMPLATE', error);
+      notify(error.message, 'error');
+      return;
+    }
+    setQuickTemplates((prev) => [...prev, { ...tpl, id }]);
+    logger.success('CREATE_QUICK_TEMPLATE', { id });
+    notify('Quick preset saved');
   };
 
-  const deleteQuickTemplate = (id) => {
-    const next = quickTemplates.filter((t) => t.id !== id);
-    setQuickTemplates(next);
-    saveUserLocal(userId, 'templates', next);
-    notify('Template removed', 'info');
+  const deleteQuickTemplate = async (id) => {
+    logger.action('DELETE_QUICK_TEMPLATE', { id });
+    setSyncing(true);
+    const { error } = await supabase.from('quick_templates').delete().eq('id', id).eq('user_id', userId);
+    setSyncing(false);
+    if (error) {
+      logger.error('DELETE_QUICK_TEMPLATE', error);
+      notify(error.message, 'error');
+      return;
+    }
+    setQuickTemplates((prev) => prev.filter((t) => t.id !== id));
+    logger.success('DELETE_QUICK_TEMPLATE', { id });
+    notify('Preset removed', 'info');
   };
 
-  // Recurring Bills CRUD
-  const addRecurringBill = (bill) => {
-    const next = [...recurringBills, { ...bill, id: generateId(), lastLoggedMonth: '' }];
-    setRecurringBills(next);
-    saveUserLocal(userId, 'recurring', next);
-    logger.success('ADD_RECURRING_BILL', bill);
+  // Recurring Bills (Supabase persisted)
+  const addRecurringBill = async (bill) => {
+    const id = generateId();
+    const row = {
+      id,
+      user_id: userId,
+      name: bill.name,
+      amount: Number(bill.amount),
+      due_day: Number(bill.dueDay) || 1,
+      account_id: bill.accountId || '',
+      task_id: bill.taskId || '',
+      last_logged_month: ''
+    };
+    logger.action('CREATE_RECURRING_BILL', row);
+    setSyncing(true);
+    const { error } = await supabase.from('recurring_bills').insert(row);
+    setSyncing(false);
+    if (error) {
+      logger.error('CREATE_RECURRING_BILL', error);
+      notify(error.message, 'error');
+      return;
+    }
+    setRecurringBills((prev) => [...prev, { ...bill, id, lastLoggedMonth: '' }]);
+    logger.success('CREATE_RECURRING_BILL', { id });
     notify('Recurring bill added');
   };
 
-  const deleteRecurringBill = (id) => {
-    const next = recurringBills.filter((b) => b.id !== id);
-    setRecurringBills(next);
-    saveUserLocal(userId, 'recurring', next);
+  const deleteRecurringBill = async (id) => {
+    logger.action('DELETE_RECURRING_BILL', { id });
+    setSyncing(true);
+    const { error } = await supabase.from('recurring_bills').delete().eq('id', id).eq('user_id', userId);
+    setSyncing(false);
+    if (error) {
+      logger.error('DELETE_RECURRING_BILL', error);
+      notify(error.message, 'error');
+      return;
+    }
+    setRecurringBills((prev) => prev.filter((b) => b.id !== id));
+    logger.success('DELETE_RECURRING_BILL', { id });
     notify('Recurring bill removed', 'info');
   };
 
@@ -562,52 +645,114 @@ export function useLedgerData(session, notify) {
     });
     if (ok) {
       const monthKey = `${curNow.getFullYear()}-${String(curNow.getMonth() + 1).padStart(2, '0')}`;
-      const next = recurringBills.map((b) => (b.id === bill.id ? { ...b, lastLoggedMonth: monthKey } : b));
-      setRecurringBills(next);
-      saveUserLocal(userId, 'recurring', next);
+      const { error } = await supabase
+        .from('recurring_bills')
+        .update({ last_logged_month: monthKey })
+        .eq('id', bill.id)
+        .eq('user_id', userId);
+      if (!error) {
+        setRecurringBills((prev) => prev.map((b) => (b.id === bill.id ? { ...b, lastLoggedMonth: monthKey } : b)));
+      }
     }
     return ok;
   };
 
-  // Savings Goals CRUD
-  const addSavingsGoal = (goal) => {
-    const next = [...savingsGoals, { ...goal, id: generateId(), savedAmount: Number(goal.savedAmount) || 0 }];
-    setSavingsGoals(next);
-    saveUserLocal(userId, 'goals', next);
-    logger.success('ADD_SAVINGS_GOAL', goal);
+  // Savings Goals (Supabase persisted)
+  const addSavingsGoal = async (goal) => {
+    const id = generateId();
+    const row = {
+      id,
+      user_id: userId,
+      name: goal.name,
+      target_amount: Number(goal.targetAmount),
+      saved_amount: Number(goal.savedAmount) || 0,
+      target_date: goal.targetDate || ''
+    };
+    logger.action('CREATE_SAVINGS_GOAL', row);
+    setSyncing(true);
+    const { error } = await supabase.from('savings_goals').insert(row);
+    setSyncing(false);
+    if (error) {
+      logger.error('CREATE_SAVINGS_GOAL', error);
+      notify(error.message, 'error');
+      return;
+    }
+    setSavingsGoals((prev) => [...prev, { ...goal, id, savedAmount: row.saved_amount }]);
+    logger.success('CREATE_SAVINGS_GOAL', { id });
     notify('Savings goal created');
   };
 
-  const contributeToGoal = (id, delta) => {
+  const contributeToGoal = async (id, delta) => {
     const amt = parseFloat(delta);
     if (!Number.isFinite(amt) || amt <= 0) return;
-    const next = savingsGoals.map((g) => (g.id === id ? { ...g, savedAmount: (Number(g.savedAmount) || 0) + amt } : g));
-    setSavingsGoals(next);
-    saveUserLocal(userId, 'goals', next);
+    const target = savingsGoals.find((g) => g.id === id);
+    if (!target) return;
+    const nextSaved = (Number(target.savedAmount) || 0) + amt;
+    logger.action('CONTRIBUTE_GOAL', { id, amt, nextSaved });
+    setSyncing(true);
+    const { error } = await supabase
+      .from('savings_goals')
+      .update({ saved_amount: nextSaved })
+      .eq('id', id)
+      .eq('user_id', userId);
+    setSyncing(false);
+    if (error) {
+      logger.error('CONTRIBUTE_GOAL', error);
+      notify(error.message, 'error');
+      return;
+    }
+    setSavingsGoals((prev) => prev.map((g) => (g.id === id ? { ...g, savedAmount: nextSaved } : g)));
+    logger.success('CONTRIBUTE_GOAL', { id, nextSaved });
     notify('Contribution added to goal');
   };
 
-  const deleteSavingsGoal = (id) => {
-    const next = savingsGoals.filter((g) => g.id !== id);
-    setSavingsGoals(next);
-    saveUserLocal(userId, 'goals', next);
+  const deleteSavingsGoal = async (id) => {
+    logger.action('DELETE_SAVINGS_GOAL', { id });
+    setSyncing(true);
+    const { error } = await supabase.from('savings_goals').delete().eq('id', id).eq('user_id', userId);
+    setSyncing(false);
+    if (error) {
+      logger.error('DELETE_SAVINGS_GOAL', error);
+      notify(error.message, 'error');
+      return;
+    }
+    setSavingsGoals((prev) => prev.filter((g) => g.id !== id));
+    logger.success('DELETE_SAVINGS_GOAL', { id });
     notify('Goal deleted', 'info');
   };
 
-  // Auto-Categorization Rules CRUD
-  const addCategoryRule = (keyword, taskId) => {
+  // Auto-Categorization Rules (Supabase persisted)
+  const addCategoryRule = async (keyword, taskId) => {
     const kw = (keyword || '').trim().toLowerCase();
     if (!kw || !taskId) return;
-    const next = [...categoryRules, { id: generateId(), keyword: kw, taskId }];
-    setCategoryRules(next);
-    saveUserLocal(userId, 'rules', next);
+    const id = generateId();
+    const row = { id, user_id: userId, keyword: kw, task_id: taskId };
+    logger.action('CREATE_CATEGORY_RULE', row);
+    setSyncing(true);
+    const { error } = await supabase.from('category_rules').insert(row);
+    setSyncing(false);
+    if (error) {
+      logger.error('CREATE_CATEGORY_RULE', error);
+      notify(error.message, 'error');
+      return;
+    }
+    setCategoryRules((prev) => [...prev, { id, keyword: kw, taskId }]);
+    logger.success('CREATE_CATEGORY_RULE', { id });
     notify('Auto-categorization rule saved');
   };
 
-  const deleteCategoryRule = (id) => {
-    const next = categoryRules.filter((r) => r.id !== id);
-    setCategoryRules(next);
-    saveUserLocal(userId, 'rules', next);
+  const deleteCategoryRule = async (id) => {
+    logger.action('DELETE_CATEGORY_RULE', { id });
+    setSyncing(true);
+    const { error } = await supabase.from('category_rules').delete().eq('id', id).eq('user_id', userId);
+    setSyncing(false);
+    if (error) {
+      logger.error('DELETE_CATEGORY_RULE', error);
+      notify(error.message, 'error');
+      return;
+    }
+    setCategoryRules((prev) => prev.filter((r) => r.id !== id));
+    logger.success('DELETE_CATEGORY_RULE', { id });
     notify('Rule deleted', 'info');
   };
 
@@ -670,7 +815,6 @@ export function useLedgerData(session, notify) {
       }
     }
 
-    // Previous month MoM comparison
     const prevM = viewMonth === 0 ? 11 : viewMonth - 1;
     const prevY = viewMonth === 0 ? viewYear - 1 : viewYear;
     const prevPrefix = `${prevY}-${String(prevM + 1).padStart(2, '0')}`;
@@ -687,7 +831,6 @@ export function useLedgerData(session, notify) {
     const outMomPct = prevOut > 0 ? Math.round(((periodOut - prevOut) / prevOut) * 100) : null;
     const inMomPct = prevIn > 0 ? Math.round(((periodIn - prevIn) / prevIn) * 100) : null;
 
-    // Safe to Spend daily pace
     let totalBudget = 0;
     let budgetedSpent = 0;
     for (const t of tasks) {
@@ -703,7 +846,6 @@ export function useLedgerData(session, notify) {
     const remainingDaysInMonth = isCurrentMonth ? Math.max(1, daysInMonth - today.getDate() + 1) : daysInMonth;
     const safeToSpendPerDay = totalBudget > 0 ? remainingBudget / remainingDaysInMonth : 0;
 
-    // 6-Month Net Worth trend
     const openingTotal = accounts.reduce((s, a) => s + (Number(a.openingBalance) || 0), 0);
     const netWorthSeries = [];
     for (let i = 5; i >= 0; i -= 1) {

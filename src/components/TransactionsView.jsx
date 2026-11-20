@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Upload } from 'lucide-react';
+import { Search, Upload, Edit3, Trash2 } from 'lucide-react';
 import { WEEKDAYS } from '../lib/constants';
 import { formatDisplayDate, formatMoney, formatTime12h, getWeekdayIndex, getWeekdayName } from '../lib/formatters';
 
@@ -56,10 +56,10 @@ export default function TransactionsView({
   }, [filteredTxs]);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div className="bg-surface rounded-xl p-4 border border-hairline">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-          <div className="lg:col-span-2">
+        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-6 gap-2.5 sm:gap-3">
+          <div className="col-span-2 lg:col-span-2">
             <label className="block text-[11px] font-semibold text-muted uppercase mb-1">Search</label>
             <div className="relative">
               <Search className="w-4 h-4 text-muted absolute left-3 top-2.5" />
@@ -77,7 +77,7 @@ export default function TransactionsView({
             <select
               value={filterType}
               onChange={(e) => setFilterType(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-hairline rounded-lg bg-surface"
+              className="w-full px-2.5 py-2 text-xs sm:text-sm border border-hairline rounded-lg bg-surface"
             >
               <option value="all">All Types</option>
               <option value="expense">Expense</option>
@@ -90,7 +90,7 @@ export default function TransactionsView({
             <select
               value={filterAccount}
               onChange={(e) => setFilterAccount(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-hairline rounded-lg bg-surface"
+              className="w-full px-2.5 py-2 text-xs sm:text-sm border border-hairline rounded-lg bg-surface"
             >
               <option value="all">All Accounts</option>
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
@@ -101,7 +101,7 @@ export default function TransactionsView({
             <select
               value={filterTask}
               onChange={(e) => setFilterTask(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-hairline rounded-lg bg-surface"
+              className="w-full px-2.5 py-2 text-xs sm:text-sm border border-hairline rounded-lg bg-surface"
             >
               <option value="all">All Tasks</option>
               {tasks.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -112,7 +112,7 @@ export default function TransactionsView({
             <select
               value={filterDay}
               onChange={(e) => setFilterDay(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-hairline rounded-lg bg-surface"
+              className="w-full px-2.5 py-2 text-xs sm:text-sm border border-hairline rounded-lg bg-surface"
             >
               <option value="all">Any Day</option>
               {WEEKDAYS.map((d, i) => <option key={d} value={String(i)}>{d}</option>)}
@@ -121,8 +121,8 @@ export default function TransactionsView({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-3 border-t border-hairline text-xs">
-          <div className="flex items-center gap-4 text-muted">
-            <span>Showing <strong className="text-ink">{filteredTxs.length}</strong> entries</span>
+          <div className="flex items-center gap-3 text-muted">
+            <span><strong className="text-ink">{filteredTxs.length}</strong> entries</span>
             <span>In: <strong className="font-mono text-positive">{formatMoney(sumIn, currency, hideAll)}</strong></span>
             <span>Out: <strong className="font-mono text-negative">{formatMoney(sumOut, currency, hideAll)}</strong></span>
           </div>
@@ -132,17 +132,17 @@ export default function TransactionsView({
               onClick={onOpenCsvImport}
               className="inline-flex items-center gap-1 border border-hairline rounded-lg px-2.5 py-1.5 bg-surface text-ink hover:bg-canvas font-medium"
             >
-              <Upload className="w-3.5 h-3.5 text-muted" /> Import CSV
+              <Upload className="w-3.5 h-3.5 text-muted" /> CSV
             </button>
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
-              className="border border-hairline rounded-lg px-2.5 py-1.5 bg-surface text-ink"
+              className="border border-hairline rounded-lg px-2 py-1.5 bg-surface text-ink"
             >
-              <option value="date-desc">Newest First</option>
-              <option value="date-asc">Oldest First</option>
-              <option value="amount-desc">Highest Amount</option>
-              <option value="amount-asc">Lowest Amount</option>
+              <option value="date-desc">Newest</option>
+              <option value="date-asc">Oldest</option>
+              <option value="amount-desc">Highest</option>
+              <option value="amount-asc">Lowest</option>
             </select>
             <button
               type="button"
@@ -153,7 +153,7 @@ export default function TransactionsView({
                 setFilterTask('all');
                 setFilterDay('all');
               }}
-              className="text-muted hover:text-ink px-2 py-1"
+              className="text-muted hover:text-ink px-1.5 py-1"
             >
               Reset
             </button>
@@ -161,7 +161,66 @@ export default function TransactionsView({
         </div>
       </div>
 
-      <div className="bg-surface rounded-xl border border-hairline overflow-x-auto">
+      {/* Mobile Native Card List */}
+      <div className="md:hidden bg-surface rounded-xl border border-hairline divide-y divide-hairline overflow-hidden">
+        {filteredTxs.map((tx) => {
+          const task = tasks.find((t) => t.id === tx.taskId);
+          const acct = accounts.find((a) => a.id === tx.accountId);
+          const toAcct = accounts.find((a) => a.id === tx.toAccountId);
+          return (
+            <div key={tx.id} className="p-3.5 flex items-center justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0">
+                <span
+                  className="w-2.5 h-2.5 rounded-full mt-1.5 shrink-0"
+                  style={{ backgroundColor: tx.type === 'transfer' ? '#111110' : (task?.color || '#6B6B66') }}
+                />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-ink truncate">
+                    {tx.note || (tx.type === 'transfer' ? 'Account Transfer' : (task?.name || 'Other'))}
+                  </p>
+                  <p className="text-[11px] text-muted truncate mt-0.5">
+                    {tx.type === 'transfer' ? `${acct?.name || '?'} → ${toAcct?.name || '?'}` : `${task?.name || 'Other'} · ${acct?.name || 'Unknown'}`}
+                  </p>
+                  <p className="text-[10px] text-muted mt-0.5">
+                    {getWeekdayName(tx.date, true)}, {formatDisplayDate(tx.date)} · {formatTime12h(tx.time)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col items-end gap-1.5 shrink-0">
+                <span className={`font-mono text-xs font-bold tabular-nums ${
+                  tx.type === 'income' ? 'text-positive' : tx.type === 'expense' ? 'text-negative' : 'text-ink'
+                }`}>
+                  {tx.type === 'income' ? '+' : tx.type === 'expense' ? '-' : ''}{formatMoney(tx.amount, currency, hideAll)}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onEditTx(tx)}
+                    aria-label="Edit transaction"
+                    className="p-1.5 rounded-md text-muted hover:text-ink hover:bg-canvas"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteTx(tx)}
+                    aria-label="Delete transaction"
+                    className="p-1.5 rounded-md text-negative hover:bg-red-50"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {filteredTxs.length === 0 && (
+          <p className="py-10 text-center text-xs text-muted">No matching transactions found.</p>
+        )}
+      </div>
+
+      {/* Desktop Full Table */}
+      <div className="hidden md:block bg-surface rounded-xl border border-hairline overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-canvas text-[11px] font-semibold uppercase tracking-wider text-muted border-b border-hairline">
@@ -211,18 +270,10 @@ export default function TransactionsView({
                     {tx.type === 'income' ? '+' : tx.type === 'expense' ? '-' : ''}{formatMoney(tx.amount, currency, hideAll)}
                   </td>
                   <td className="py-3 px-4 text-right whitespace-nowrap">
-                    <button
-                      type="button"
-                      onClick={() => onEditTx(tx)}
-                      className="text-xs font-medium text-ink hover:underline mr-3 py-1"
-                    >
+                    <button type="button" onClick={() => onEditTx(tx)} className="text-xs font-medium text-ink hover:underline mr-3 py-1">
                       Edit
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => onDeleteTx(tx)}
-                      className="text-xs font-medium text-negative hover:underline py-1"
-                    >
+                    <button type="button" onClick={() => onDeleteTx(tx)} className="text-xs font-medium text-negative hover:underline py-1">
                       Delete
                     </button>
                   </td>
